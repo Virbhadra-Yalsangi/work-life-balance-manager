@@ -2,6 +2,11 @@
 
 A Python-based application built with Streamlit to track daily activities, understand time allocation, and explore work-life patterns through interactive dashboards and analytics.
 
+
+## Dashboard Preview
+
+![Work-Life Balance Manager Dashboard](dashboard-screenshot.png)
+
 ## Project Overview
 
 The Work-Life Balance Manager helps users record how they spend their time across activities such as work, study, sleep, exercise, family, and personal care. It presents recorded activity data through KPIs, interactive charts, date filters, and data-quality checks.

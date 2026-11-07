@@ -7,11 +7,18 @@ from database import (
     save_activity,
     update_activity,
     delete_activity,
+    save_planned_activity,
+    load_planned_activities,
+    update_planned_activity,
+    update_planned_activity_status,
+    delete_planned_activity,
+    load_reminder_history,
 )
 
 import sqlite3
 from pathlib import Path
 from datetime import date, datetime, timedelta
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 import plotly.express as px
@@ -474,9 +481,26 @@ else:
             legend_title_text="Activity",
         )
 
+        bar_chart.update_layout(
+            template="plotly_dark",
+            height=350,
+            margin=dict(l=20, r=20, t=30, b=20),
+            legend_title_text="Activity",
+            xaxis=dict(
+                title="Date",
+                type="category",
+                tickangle=-30,
+            ),
+            yaxis=dict(
+                title="Hours",
+                rangemode="tozero",
+            ),
+        )
+
         st.plotly_chart(
             bar_chart,
             use_container_width=True,
+            config={"displayModeBar": False},
         )
 
 
@@ -619,7 +643,20 @@ else:
 
         trend_chart.update_layout(
             template="plotly_dark",
-            margin=dict(l=10, r=10, t=45, b=10),
+            height=380,
+            margin=dict(l=20, r=20, t=45, b=30),
+            legend_title_text="Activity",
+            xaxis=dict(
+                title=trend_period,
+                type="category",
+                tickangle=-30,
+            ),
+            yaxis=dict(
+                title="Hours",
+                rangemode="tozero",
+            ),
+            hovermode="x unified",
+
         )
 
         trend_chart.update_xaxes(type="category")
@@ -795,7 +832,341 @@ else:
 
 
 # =========================================================
-# 10. FOOTER
+# 10. ACTIVITY PLANNER
+# =========================================================
+
+st.divider()
+st.header("🗓️ Activity Planner")
+st.caption("Plan your day, then update each activity as it progresses.")
+
+planner_tab_add, planner_tab_manage = st.tabs(
+    ["➕ Add a plan", "📋 Manage plans"]
+)
+
+with planner_tab_add:
+    with st.form("add_planned_activity_form", clear_on_submit=True):
+        plan_col1, plan_col2 = st.columns(2)
+
+        with plan_col1:
+            planned_date = st.date_input(
+                "Planned date",
+                value=date.today(),
+                key="planned_activity_date",
+            )
+            planned_type = st.selectbox(
+                "Activity type",
+                ACTIVITIES,
+                key="planned_activity_type",
+            )
+            planned_start = st.time_input(
+                "Start time",
+                value=datetime.strptime("09:00", "%H:%M").time(),
+                key="planned_start_time",
+            )
+
+        with plan_col2:
+            planned_end = st.time_input(
+                "End time",
+                value=datetime.strptime("10:00", "%H:%M").time(),
+                key="planned_end_time",
+            )
+            planned_notes = st.text_input(
+                "Notes (optional)",
+                max_chars=200,
+                key="planned_activity_notes",
+            )
+
+        save_plan_clicked = st.form_submit_button(
+            "💾 Save planned activity",
+            use_container_width=True,
+        )
+
+    if save_plan_clicked:
+        try:
+            saved, message = save_planned_activity(
+                planned_date,
+                planned_type,
+                planned_start.strftime("%H:%M"),
+                planned_end.strftime("%H:%M"),
+                planned_notes,
+            )
+            if saved:
+                st.success(message)
+                st.rerun()
+            else:
+                st.error(message)
+        except sqlite3.Error as error:
+            st.error(f"Could not save planned activity: {error}")
+
+with planner_tab_manage:
+    range_col1, range_col2 = st.columns(2)
+    with range_col1:
+        planner_from = st.date_input(
+            "Show plans from",
+            value=date.today() - timedelta(days=7),
+            key="planner_filter_from",
+        )
+    with range_col2:
+        planner_to = st.date_input(
+            "Show plans to",
+            value=date.today() + timedelta(days=30),
+            key="planner_filter_to",
+        )
+
+    if planner_from > planner_to:
+        st.error("The start date cannot be later than the end date.")
+    else:
+        try:
+            planned_df = load_planned_activities(planner_from, planner_to)
+        except sqlite3.Error as error:
+            st.error(f"Could not load planned activities: {error}")
+            planned_df = pd.DataFrame()
+
+        if planned_df.empty:
+            st.info("No planned activities found in this date range. Add a plan in the first tab.")
+        else:
+            # Status dashboard: categories are calculated from the current India time.
+            india_tz = ZoneInfo("Asia/Kolkata")
+            now_local = datetime.now(india_tz)
+            due_window_end = now_local + timedelta(minutes=5)
+
+            def _plan_datetime(row, time_column):
+                plan_date = row["activity_date"]
+                if isinstance(plan_date, str):
+                    plan_date = date.fromisoformat(plan_date)
+                plan_time = datetime.strptime(str(row[time_column]), "%H:%M").time()
+                return datetime.combine(plan_date, plan_time).replace(tzinfo=india_tz)
+
+            plan_rows = planned_df.copy()
+            plan_rows["_start_dt"] = plan_rows.apply(
+                lambda row: _plan_datetime(row, "start_time"), axis=1
+            )
+            plan_rows["_end_dt"] = plan_rows.apply(
+                lambda row: _plan_datetime(row, "end_time"), axis=1
+            )
+            is_planned = plan_rows["status"].eq("Planned")
+            active_df = plan_rows[
+                is_planned & (plan_rows["_start_dt"] <= now_local)
+                & (plan_rows["_end_dt"] > now_local)
+            ].copy()
+            upcoming_df = plan_rows[
+                is_planned & (plan_rows["_start_dt"] > due_window_end)
+            ].copy()
+            completed_df = plan_rows[plan_rows["status"].eq("Completed")].copy()
+
+            try:
+                reminder_df = load_reminder_history(planner_from, planner_to)
+            except sqlite3.Error as error:
+                st.error(f"Could not load reminder history: {error}")
+                reminder_df = pd.DataFrame()
+
+            if reminder_df.empty:
+                due_soon_df = pd.DataFrame()
+                failed_df = pd.DataFrame()
+                sent_df = pd.DataFrame()
+            else:
+                reminder_df["_reminder_dt"] = pd.to_datetime(
+                    reminder_df["reminder_at"], errors="coerce"
+                )
+                # SQLite values are stored with India offset; normalise for comparison.
+                def _as_india_time(value):
+                    if pd.isna(value):
+                        return None
+                    parsed = pd.Timestamp(value).to_pydatetime()
+                    if parsed.tzinfo is None:
+                        return parsed.replace(tzinfo=india_tz)
+                    return parsed.astimezone(india_tz)
+                reminder_df["_reminder_dt"] = reminder_df["_reminder_dt"].apply(_as_india_time)
+                due_soon_df = reminder_df[
+                    reminder_df["reminder_status"].eq("Pending")
+                    & reminder_df["_reminder_dt"].apply(
+                        lambda value: value is not None and now_local <= value <= due_window_end
+                    )
+                ].copy()
+                failed_df = reminder_df[
+                    reminder_df["reminder_status"].eq("Failed")
+                ].copy()
+                sent_df = reminder_df[
+                    reminder_df["reminder_status"].eq("Sent")
+                ].copy()
+
+            def _show_plan_table(frame):
+                if frame.empty:
+                    st.info("Nothing to show in this section right now.")
+                    return
+                view = frame.drop(columns=[c for c in ["_start_dt", "_end_dt"] if c in frame.columns]).copy()
+                view["activity_date"] = view["activity_date"].astype(str)
+                columns = ["id", "activity_date", "start_time", "end_time", "activity_type", "status", "notes"]
+                st.dataframe(view[columns], use_container_width=True, hide_index=True)
+
+            def _show_reminder_table(frame):
+                if frame.empty:
+                    st.info("No notification records in this section.")
+                    return
+                columns = ["reminder_id", "activity_id", "activity_date", "start_time", "activity_type", "channel", "reminder_at", "reminder_status"]
+                if "failure_reason" in frame.columns:
+                    columns.append("failure_reason")
+                st.dataframe(frame[columns], use_container_width=True, hide_index=True)
+
+            st.subheader("📌 Activity & Notification Status")
+            status_tabs = st.tabs([
+                f"🟢 Active ({len(active_df)})",
+                f"⏰ Due in 5 min ({len(due_soon_df)})",
+                f"📅 Upcoming ({len(upcoming_df)})",
+                f"❌ Failed ({len(failed_df)})",
+                f"📨 Sent ({len(sent_df)})",
+                f"✅ Completed ({len(completed_df)})",
+            ])
+            with status_tabs[0]:
+                _show_plan_table(active_df)
+            with status_tabs[1]:
+                _show_reminder_table(due_soon_df)
+                st.caption("These are pending SMS, voice and email reminders scheduled between now and the next five minutes. Keep scheduler.py running for delivery.")
+            with status_tabs[2]:
+                _show_plan_table(upcoming_df)
+            with status_tabs[3]:
+                _show_reminder_table(failed_df)
+                st.caption("Failed refers to notification attempts, not the activity itself. Review the failure reason before retrying.")
+            with status_tabs[4]:
+                _show_reminder_table(sent_df)
+                st.caption("Sent means the provider accepted the notification request. Check the provider dashboard for final delivery details.")
+            with status_tabs[5]:
+                _show_plan_table(completed_df)
+
+            st.divider()
+            st.subheader("All planned activities")
+            display_plans = planned_df.copy()
+            display_plans["activity_date"] = display_plans["activity_date"].astype(str)
+            st.dataframe(
+                display_plans[
+                    ["id", "activity_date", "start_time", "end_time", "activity_type", "status", "notes"]
+                ],
+                use_container_width=True,
+                hide_index=True,
+            )
+
+            plan_ids = planned_df["id"].astype(int).tolist()
+            selected_plan_id = st.selectbox(
+                "Select a planned activity to manage",
+                plan_ids,
+                format_func=lambda plan_id: (
+                    f"#{plan_id} | "
+                    f"{planned_df.loc[planned_df['id'] == plan_id, 'activity_date'].iloc[0]} | "
+                    f"{planned_df.loc[planned_df['id'] == plan_id, 'activity_type'].iloc[0]}"
+                ),
+                key="selected_planned_activity_id",
+            )
+            selected_plan = planned_df.loc[
+                planned_df["id"] == selected_plan_id
+            ].iloc[0]
+
+            selected_start = datetime.strptime(
+                str(selected_plan["start_time"]), "%H:%M"
+            ).time()
+            selected_end = datetime.strptime(
+                str(selected_plan["end_time"]), "%H:%M"
+            ).time()
+
+            st.subheader("✏️ Edit planned activity")
+            with st.form("edit_planned_activity_form"):
+                edit_plan_col1, edit_plan_col2 = st.columns(2)
+                with edit_plan_col1:
+                    edit_plan_date = st.date_input(
+                        "Edit date",
+                        value=selected_plan["activity_date"],
+                        key="edit_planned_date",
+                    )
+                    edit_plan_type = st.selectbox(
+                        "Edit activity",
+                        ACTIVITIES,
+                        index=(ACTIVITIES.index(selected_plan["activity_type"])
+                               if selected_plan["activity_type"] in ACTIVITIES else 0),
+                        key="edit_planned_type",
+                    )
+                    edit_plan_start = st.time_input(
+                        "Edit start time",
+                        value=selected_start,
+                        key="edit_planned_start",
+                    )
+                with edit_plan_col2:
+                    edit_plan_end = st.time_input(
+                        "Edit end time",
+                        value=selected_end,
+                        key="edit_planned_end",
+                    )
+                    edit_plan_notes = st.text_input(
+                        "Edit notes",
+                        value="" if pd.isna(selected_plan["notes"]) else str(selected_plan["notes"]),
+                        max_chars=200,
+                        key="edit_planned_notes",
+                    )
+
+                update_plan_clicked = st.form_submit_button("Update planned activity")
+
+            if update_plan_clicked:
+                try:
+                    updated, message = update_planned_activity(
+                        selected_plan_id,
+                        edit_plan_date,
+                        edit_plan_type,
+                        edit_plan_start.strftime("%H:%M"),
+                        edit_plan_end.strftime("%H:%M"),
+                        edit_plan_notes,
+                    )
+                    if updated:
+                        st.success(message)
+                        st.rerun()
+                    else:
+                        st.error(message)
+                except sqlite3.Error as error:
+                    st.error(f"Could not update planned activity: {error}")
+
+            status_col, delete_col = st.columns(2)
+            with status_col:
+                status_options = ["Planned", "Completed", "Cancelled"]
+                current_status = str(selected_plan["status"])
+                if current_status not in status_options:
+                    current_status = "Planned"
+                new_plan_status = st.selectbox(
+                    "Activity status",
+                    status_options,
+                    index=status_options.index(current_status),
+                    key="planned_activity_status",
+                )
+                if st.button("Update status", key="update_planned_status"):
+                    try:
+                        changed, message = update_planned_activity_status(
+                            selected_plan_id, new_plan_status
+                        )
+                        if changed:
+                            st.success(message)
+                            st.rerun()
+                        else:
+                            st.error(message)
+                    except sqlite3.Error as error:
+                        st.error(f"Could not update status: {error}")
+
+            with delete_col:
+                confirm_plan_delete = st.checkbox(
+                    f"Confirm deletion of planned activity #{selected_plan_id}",
+                    key=f"confirm_planned_delete_{selected_plan_id}",
+                )
+                if st.button("🗑️ Delete planned activity", key="delete_planned_activity"):
+                    if not confirm_plan_delete:
+                        st.warning("Please confirm before deleting this planned activity.")
+                    else:
+                        try:
+                            if delete_planned_activity(selected_plan_id):
+                                st.success("Planned activity deleted successfully.")
+                                st.rerun()
+                            else:
+                                st.error("Planned activity not found.")
+                        except sqlite3.Error as error:
+                            st.error(f"Could not delete planned activity: {error}")
+
+
+# =========================================================
+# 11. FOOTER
 # =========================================================
 
 st.divider()

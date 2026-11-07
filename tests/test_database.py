@@ -97,5 +97,52 @@ class TestActivityDatabase(unittest.TestCase):
         self.assertEqual(message, "Record not found. Refresh and try again.")
 
 
-if __name__ == "__main__":
-    unittest.main(verbosity=2)
+    def test_save_planned_activity_creates_three_reminders(self):
+        tomorrow = date.today() + timedelta(days=1)
+
+        saved, message = db.save_planned_activity(
+            tomorrow,
+            "Work",
+            "09:00",
+            "10:00",
+            "Reminder test"
+        )
+
+        self.assertTrue(saved, message)
+
+        with db.get_connection() as conn:
+            activity = conn.execute(
+                """
+                SELECT id
+                FROM planned_activities
+                WHERE activity_date = ?
+                AND activity_type = ?
+                ORDER BY id DESC
+                LIMIT 1
+                """,
+                (tomorrow.isoformat(), "Work")
+            ).fetchone()
+
+            self.assertIsNotNone(activity)
+
+            reminders = conn.execute(
+                """
+                SELECT channel, status, reminder_at
+                FROM reminders
+                WHERE planned_activity_id = ?
+                """,
+                (activity[0],)
+            ).fetchall()
+
+        self.assertEqual(len(reminders), 3)
+
+        channels = sorted(row[0] for row in reminders)
+
+        self.assertEqual(
+            channels,
+            ["email", "sms", "voice"]
+        )
+
+        for reminder in reminders:
+            self.assertEqual(reminder[1], "Pending")
+            self.assertTrue(reminder[2] is not None)

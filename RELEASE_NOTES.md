@@ -1,23 +1,30 @@
 # Release notes: Work-Life Balance Manager
 
-## Fixes in this package
+## Version 2
 
-- Fixed the empty-dashboard crash: the daily Plotly bar chart is now rendered only when the selected date range contains activity records.
-- Added a regression test that checks the chart is both created and rendered inside the non-empty-data branch.
-- Kept planner lifecycle behaviour: editing a plan replaces pending reminders, completing/cancelling a plan cancels pending reminders, and deleting a plan removes its reminder rows.
-- Kept reminder processing tests isolated with mocked senders. The test suite does not send real SMS messages, voice calls or emails.
+### Added
+- **Completed plans update the dashboard.** Marking a plan Completed adds its hours to the activity log (within the 24-hour limit). Changing the status back or editing the plan updates that record; deleting a plan keeps the logged hours.
+- **Weekly balance score and smart suggestions** (`suggestions.py`): 0-100 score from the last 7 days, free-time detection, and one-click **Add to plan** suggestions.
+- **Telegram reminders** (free) as a new channel, plus `ENABLED_CHANNELS` in `.env` to choose which channels get reminders. Disabled channels are marked Skipped.
+- **Go-live checker** `scripts/check_notifications.py`: validates `.env` without printing secrets, sends test email/Telegram/SMS/voice, shows real Twilio delivery status, and finds your Telegram chat id.
+- `setup.bat` one-click setup and `.env.example`.
 
-## Validation performed for this release
+### Changed
+- Failed plans now explain why (planned window and a hint to mark Completed).
+- Phone numbers are normalised (`98765 43210` and `+91...` both work).
+- A reminder that would arrive after the activity already started is recorded as Missed instead of being sent.
+- The `.env` file is always loaded from the project folder.
 
+### Fixed
+- Tests no longer depend on the developer's own `.env`.
+- Twilio trial restrictions are documented (custom SMS and voice need a paid account).
+
+### Validation
 - Python compilation: passed.
-- Automated tests: 15 passed.
-- ZIP integrity check: passed.
-- Package review: no `.env`, SQLite database, backup database, virtual environment or Python cache is included.
+- Automated tests: 51 passed locally and in GitHub Actions.
+- Live email and Telegram reminders verified by the author. Live SMS and voice not verified (Twilio trial limits).
 
-## Important operational notes
+## Version 1
 
-- Install dependencies from `requirements.txt` before starting the app.
-- Run the Streamlit app and reminder scheduler in separate terminals.
-- Real SMS, voice and email delivery remains optional and depends on your own rotated provider credentials, verified senders, provider permissions, billing and internet access.
-- A provider accepting a message request is not proof of end-user delivery.
-- This release was not live-tested against Twilio or SendGrid and does not include any credentials.
+- Dashboard, planner, reminder scheduler and 15 automated tests.
+- Fixed the empty-dashboard crash so the daily bar chart renders only when the selected range has records.

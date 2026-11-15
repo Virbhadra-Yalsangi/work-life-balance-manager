@@ -29,8 +29,9 @@ A local-first activity tracking and analytics application built with Python, Str
 - SQLite
 - pandas
 - Plotly
-- Twilio Python SDK
-- SendGrid Python SDK
+- Twilio Python SDK (optional SMS and voice)
+- SendGrid Python SDK (email)
+- Telegram Bot API via `requests` (free push reminders)
 - python-dotenv
 - APScheduler 3.x
 - unittest
@@ -52,7 +53,7 @@ Work_Life_Balance_Manager_Ready/
 ├── run_tests.bat
 ├── setup.bat              # one-click install (venv + dependencies + .env)
 ├── scripts/
-│   ├── check_notifications.py  # go-live checker (config / email / sms / voice)
+│   ├── check_notifications.py  # go-live checker (config / email / telegram / sms / voice)
 │   └── test_sendgrid.py   # optional manual email check
 ├── tests/
 │   ├── test_app_structure.py
@@ -110,7 +111,10 @@ The scheduler runs a check immediately at startup and then every 15 seconds. It 
 
 - A reminder is scheduled for **five minutes before** the activity start time.
 - If that five-minute point has already passed when you create or edit the plan, the application does not create a late reminder for that plan.
-- SMS and voice calls use Twilio. Email uses SendGrid. Provider account setup, sender verification, recipient permissions, service availability and billing can affect delivery.
+- Email uses SendGrid and Telegram uses a free bot. SMS and voice calls use Twilio. Provider account setup, sender verification, recipient permissions, service availability and billing can affect delivery.
+- `ENABLED_CHANNELS` in `.env` decides which channels get reminders (for example `email,telegram`). Reminders for a disabled channel are marked `Skipped`, not `Failed`.
+- If the scheduler was not running and a reminder only becomes due after the activity has already started, it is not sent. It is recorded as `Failed` with a "Missed" reason, because "starts at 10:00" arriving at 10:20 would be misleading.
+- Twilio **trial** accounts cannot send custom SMS text or place custom voice calls (templates only, and voice only within your own country). Use email and Telegram, or upgrade Twilio. In India, SMS delivery can also be affected by DLT rules.
 - A `Sent` status means the provider API accepted the submission. It does not prove that a phone displayed the SMS, a person answered a call, or an email reached the inbox.
 - `Failed` means the application did not receive a successful submission response. Review the scheduler log and provider dashboard before retrying.
 - The scheduler is local. It cannot send reminders while the computer is shut down, asleep, offline or while the scheduler process is stopped.
@@ -121,7 +125,7 @@ The scheduler runs a check immediately at startup and then every 15 seconds. It 
 Notifications are optional. The dashboard and planner work without provider credentials.
 
 1. Copy `.env.example` to `.env` in the project root (`setup.bat` does this for you). `NOTIFICATION_TO_PHONE` and `NOTIFICATION_TO_EMAIL` are where reminders are delivered.
-2. Add your own current Twilio and SendGrid values to `.env` locally.
+2. Add your own current SendGrid, Telegram and (optionally) Twilio values to `.env` locally.
 3. Use provider-approved sender details and recipients.
 4. Keep `.env` private. Never upload it, commit it, or share screenshots of it.
 
@@ -135,7 +139,7 @@ Run:
 python -m unittest discover -s tests -v
 ```
 
-The current package was validated with **51 passing tests**. The suite checks activity CRUD and validation, planner reminder creation/edit/status/delete behaviour, and reminder processing using mocked senders. The tests do not make real SMS messages, calls or emails and use temporary databases instead of the user's local database.
+The current version was validated with **51 passing tests**. The suite checks activity CRUD and validation, planner reminder creation/edit/status/delete behaviour, automatic logging of completed plans, the weekly balance score and suggestion logic, phone-number normalisation, the Telegram sender, enabled-channel handling, and reminder processing using mocked senders. The tests do not send real SMS messages, calls, emails or Telegram messages, use temporary databases, and ignore your personal `.env` so results are the same on every computer.
 
 ## Database and backups
 
@@ -149,12 +153,16 @@ The app creates `data/work_life_balance.db` automatically. Existing databases ar
 4. Review allocation, trend charts and data-quality checks.
 5. Download a filtered CSV report.
 6. Add a future planned activity, edit it, change its status, and delete a disposable test plan.
-7. Explain that reminders are an optional background process and show the mocked automated tests. Only demonstrate live provider delivery if the credentials are configured securely and a controlled test is appropriate.
+7. Mark a plan Completed and show its hours appear in the dashboard activity log. Show a Failed plan and its failure reason.
+8. Open **Balance Score & Smart Suggestions**, explain the weekly score and use **Add to plan** on a suggestion.
+9. Explain that reminders are an optional background process and show the mocked automated tests. Only demonstrate live provider delivery if the credentials are configured securely and a controlled test is appropriate.
 
 ## Known operational limitations
 
 - This is a local portfolio application, not a multi-user hosted service. It does not include user authentication or cloud database hosting.
 - Notifications depend on third-party services and a continuously running local scheduler.
+- Live email and Telegram reminders were verified by the author. Live SMS and voice were not, because Twilio trial accounts only allow template messages.
+- The weekly targets in `suggestions.py` are sensible defaults, not medical or clinical advice. Edit them to fit your own life.
 - A process interruption during an in-flight provider request can require manual reconciliation with the provider dashboard before retrying, to avoid duplicate messages.
 - The dashboard reflects logged data; it does not automatically detect actual sleep, work or exercise.
 

@@ -1,38 +1,18 @@
-
-# Operating system files
-.DS_Store
-Thumbs.db
-
-# Python virtual environments
 .venv/
 venv/
-
-# Environment variables and secrets
+__pycache__/
+*.py[cod]
 .env
 .env.*
 !.env.example
-
-# Backup files and folders
-Backup file/
-
-# SQLite databases and database backups
 *.db
-*.db-*
 *.sqlite
 *.sqlite3
+*.db-shm
+*.db-wal
 *.bak
 *.backup
-*.db-journal
-*.db-wal
-*.db-shm
-
-# Python cache files
-__pycache__/
-*.py[cod]
-
-# Temporary files
-*.tmp
-*.temp
-
-# Starter ZIP archive
-Work_Life_Balance_Manager_Starter.zip
+*_backup.py
+.vscode/
+.DS_Store
+Thumbs.db

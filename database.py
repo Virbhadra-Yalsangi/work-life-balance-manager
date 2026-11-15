@@ -7,6 +7,25 @@ from datetime import date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
 import pandas as pd
+from dotenv import load_dotenv
+
+
+# Read ENABLED_CHANNELS etc. from .env, even when only the dashboard runs.
+load_dotenv(Path(__file__).resolve().parent / ".env")
+
+ALL_CHANNELS = ("sms", "voice", "email", "telegram")
+
+
+def get_enabled_channels():
+    """
+    Channels that should get reminders, from ENABLED_CHANNELS in .env
+    (comma separated, e.g. "email,telegram"). Default: sms, voice and email.
+    """
+    raw = os.getenv("ENABLED_CHANNELS")
+    if raw is None or not raw.strip():
+        return ("sms", "voice", "email")
+    chosen = [c.strip().lower() for c in raw.split(",")]
+    return tuple(c for c in ALL_CHANNELS if c in chosen)
 
 
 # --------------------------------------------------
@@ -78,6 +97,9 @@ def initialize_database():
             conn.execute("ALTER TABLE activities ADD COLUMN notes TEXT DEFAULT ''")
         if "created_at" not in activity_columns:
             conn.execute("ALTER TABLE activities ADD COLUMN created_at TEXT DEFAULT ''")
+        # Links a dashboard record to the completed plan that created it.
+        if "planned_activity_id" not in activity_columns:
+            conn.execute("ALTER TABLE activities ADD COLUMN planned_activity_id INTEGER")
 
         conn.execute("""
             CREATE TABLE IF NOT EXISTS planned_activities (
@@ -88,9 +110,22 @@ def initialize_database():
                 end_time TEXT NOT NULL,
                 notes TEXT DEFAULT '',
                 status TEXT NOT NULL DEFAULT 'Planned',
-                created_at TEXT NOT NULL DEFAULT ''
+                created_at TEXT NOT NULL DEFAULT '',
+                activity_failure_reason TEXT DEFAULT ''
             )
         """)
+
+        # Add the activity-level failure reason without changing existing records.
+        planned_columns = {
+            row[1] for row in conn.execute(
+                "PRAGMA table_info(planned_activities)"
+            ).fetchall()
+        }
+        if "activity_failure_reason" not in planned_columns:
+            conn.execute(
+                "ALTER TABLE planned_activities "
+                "ADD COLUMN activity_failure_reason TEXT DEFAULT ''"
+            )
 
         conn.execute("""
             CREATE TABLE IF NOT EXISTS reminders (
@@ -352,7 +387,7 @@ def _normalise_activity_time(value):
 
 
 def _build_reminder_values(activity_id, activity_date, start_time, now=None):
-    """Build three reminder rows if the five-minute reminder is still ahead."""
+    """Build one reminder row per enabled channel if the 5-minute reminder is still ahead."""
     timezone = ZoneInfo("Asia/Kolkata")
     current_time = now or datetime.now(timezone)
     if current_time.tzinfo is None:
@@ -373,8 +408,63 @@ def _build_reminder_values(activity_id, activity_date, start_time, now=None):
     created_text = current_time.isoformat(timespec="seconds")
     return [
         (activity_id, reminder_text, channel, "Pending", created_text)
-        for channel in ("sms", "voice", "email")
+        for channel in sorted(get_enabled_channels())
     ]
+
+
+def _sync_completed_activity(conn, record_id):
+    """
+    Keep the dashboard activity log in step with a planned activity.
+
+    Completed plan  -> one dashboard record (duration = end - start).
+    Any other status -> that auto-created record is removed.
+    Returns a warning string when hours could not be logged, else "".
+    """
+    conn.execute(
+        "DELETE FROM activities WHERE planned_activity_id = ?", (record_id,)
+    )
+    plan = conn.execute(
+        """
+        SELECT activity_date, activity_type, start_time, end_time, notes, status
+        FROM planned_activities WHERE id = ?
+        """,
+        (record_id,),
+    ).fetchone()
+    if not plan or plan[5] != "Completed":
+        return ""
+
+    activity_date, activity_type, start_time, end_time, notes, _ = plan
+    start = datetime.strptime(start_time, "%H:%M")
+    end = datetime.strptime(end_time, "%H:%M")
+    hours = round((end - start).total_seconds() / 3600, 2)
+
+    existing = conn.execute(
+        "SELECT COALESCE(SUM(duration_hours), 0) FROM activities WHERE activity_date = ?",
+        (activity_date,),
+    ).fetchone()[0]
+    if existing + hours > 24:
+        return (
+            f" Note: {hours:.2f} h were NOT added to the dashboard because "
+            f"{activity_date} already has {existing:.2f} h logged (24 h limit)."
+        )
+
+    note_text = f"Completed plan #{record_id}"
+    if notes:
+        note_text += f": {notes}"
+    conn.execute(
+        """
+        INSERT INTO activities (
+            activity_date, activity_type, duration_hours, notes,
+            created_at, planned_activity_id
+        )
+        VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        (
+            activity_date, activity_type, hours, note_text,
+            datetime.now().isoformat(timespec="seconds"), record_id,
+        ),
+    )
+    return f" {hours:.2f} h added to the dashboard activity log."
 
 
 def save_planned_activity(
@@ -463,7 +553,8 @@ def load_planned_activities(start_date, end_date):
                 end_time,
                 notes,
                 status,
-                created_at
+                created_at,
+                COALESCE(activity_failure_reason, '') AS activity_failure_reason
             FROM planned_activities
             WHERE activity_date BETWEEN ? AND ?
             ORDER BY activity_date ASC, start_time ASC
@@ -555,9 +646,9 @@ def update_planned_activity(
     return True, "Planned activity updated successfully!"
 
 
-def update_planned_activity_status(record_id, new_status):
-    """Change activity status and cancel pending reminders when appropriate."""
-    allowed_statuses = ["Planned", "Completed", "Cancelled"]
+def update_planned_activity_status(record_id, new_status, failure_reason=""):
+    """Update the activity status independently from notification statuses."""
+    allowed_statuses = ["Planned", "Completed", "Failed", "Cancelled"]
     if new_status not in allowed_statuses:
         return False, "Invalid activity status."
 
@@ -567,9 +658,18 @@ def update_planned_activity_status(record_id, new_status):
         return False, "Invalid activity ID."
 
     with get_connection() as conn:
+        reason = (failure_reason or "").strip()[:500]
+        if new_status == "Failed" and not reason:
+            reason = "Marked Failed manually."
+        elif new_status != "Failed":
+            reason = ""
         cursor = conn.execute(
-            "UPDATE planned_activities SET status = ? WHERE id = ?",
-            (new_status, record_id),
+            """
+            UPDATE planned_activities
+            SET status = ?, activity_failure_reason = ?
+            WHERE id = ?
+            """,
+            (new_status, reason, record_id),
         )
         if cursor.rowcount == 0:
             return False, "Planned activity not found."
@@ -608,9 +708,55 @@ def update_planned_activity_status(record_id, new_status):
                         """,
                         reminder_rows,
                     )
+        extra = _sync_completed_activity(conn, record_id)
         conn.commit()
 
-    return True, "Activity status updated successfully!"
+    return True, "Activity status updated successfully!" + extra
+
+
+def mark_overdue_activities_failed(now=None):
+    """
+    Mark activities as Failed when their planned end time has passed
+    and they are still Planned. This does not alter notification outcomes.
+    """
+    timezone = ZoneInfo("Asia/Kolkata")
+    current_time = now or datetime.now(timezone)
+    if current_time.tzinfo is None:
+        current_time = current_time.replace(tzinfo=timezone)
+    else:
+        current_time = current_time.astimezone(timezone)
+
+    current_iso = current_time.isoformat(timespec="seconds")
+
+    with get_connection() as conn:
+        cursor = conn.execute(
+            """
+            UPDATE planned_activities
+            SET status = 'Failed',
+                activity_failure_reason =
+                    'Planned ' || start_time || ' to ' || end_time || ' on '
+                    || activity_date || '. End time passed and it was not '
+                    || 'marked Completed, so it was auto-marked Failed. '
+                    || 'If you did it, set status to Completed.'
+            WHERE status = 'Planned'
+              AND (activity_date || 'T' || end_time) <= ?
+            """,
+            (current_iso,),
+        )
+        # Do not send notifications for activities that have already failed.
+        conn.execute(
+            """
+            UPDATE reminders
+            SET status = 'Cancelled',
+                failure_reason = 'Activity was marked Failed after its end time.'
+            WHERE status = 'Pending'
+              AND planned_activity_id IN (
+                  SELECT id FROM planned_activities WHERE status = 'Failed'
+              )
+            """
+        )
+        conn.commit()
+        return cursor.rowcount
 
 
 def delete_planned_activity(record_id):
@@ -621,6 +767,11 @@ def delete_planned_activity(record_id):
         return False
 
     with get_connection() as conn:
+        # Hours already logged on the dashboard are real history: keep them.
+        conn.execute(
+            "UPDATE activities SET planned_activity_id = NULL WHERE planned_activity_id = ?",
+            (record_id,),
+        )
         conn.execute(
             "DELETE FROM reminders WHERE planned_activity_id = ?",
             (record_id,),

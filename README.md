@@ -1,6 +1,6 @@
 # Work-Life Balance Manager
 
-A local-first activity tracking and analytics application built with Python, Streamlit, SQLite, pandas and Plotly. It includes a daily activity dashboard, a planner, and an optional reminder worker that can submit SMS, voice-call and email reminders.
+A local-first activity tracking and analytics application built with Python, Streamlit, SQLite, pandas and Plotly. It includes a daily activity dashboard, a planner, and a weekly balance score with smart free-time suggestions, and an optional reminder worker that sends email, Telegram, SMS and voice-call reminders.
 
 ## Features
 
@@ -13,7 +13,12 @@ A local-first activity tracking and analytics application built with Python, Str
 - Review data-quality indicators, including dates above 24 hours and missing notes.
 - Plan activities with start/end times and notes.
 - Edit, complete, cancel and delete planned activities.
-- Generate three reminders (SMS, voice and email) five minutes before a planned activity, provided that reminder time is still in the future when the plan is saved or edited.
+- Create one reminder per enabled channel (email, Telegram, and optionally SMS and voice) five minutes before a planned activity, provided that reminder time is still in the future when the plan is saved or edited.
+- Marking a plan **Completed** automatically adds its hours (end minus start) to the dashboard activity log, within the 24-hour daily limit. Changing it back, or editing its times, updates that record. Deleting a plan keeps the hours already logged.
+- **Weekly balance score and smart suggestions** (`suggestions.py`): the last 7 days are compared with weekly targets per category and given a 0-100 score. Free time left today (after planned activities, before 22:30) is filled with the most neglected categories at sensible times of day, each with a one-click **Add to plan** button. Change the targets in `WEEKLY_TARGETS` at the top of `suggestions.py`.
+- **Channels**: set `ENABLED_CHANNELS` in `.env` (e.g. `email,telegram`). Only those channels get reminders; old reminders for other channels are marked Skipped. Twilio *trial* accounts cannot send custom SMS or voice (templates only), so use email + Telegram until you upgrade. Telegram setup: create a bot with @BotFather, put its token in `TELEGRAM_BOT_TOKEN`, press START in the bot, then run `scripts/check_notifications.py telegram-id` to get `TELEGRAM_CHAT_ID`.
+- **Go-live checker**: `scripts/check_notifications.py` validates `.env` (without printing secrets) and sends one test email, SMS or call, then shows the real Twilio delivery status and error code. Phone numbers are accepted as `98765 43210` or `+91...`. A reminder that would arrive after the activity already started is recorded as Failed ("Missed") instead of being sent.
+- Failed plans show a clear reason (planned time window and why it failed) and can still be set to Completed if you did the activity.
 - Run the reminder scheduler as a separate process. It checks every 15 seconds and prints each processing result.
 - Run automated database and reminder tests using isolated temporary SQLite databases and mocked notification senders.
 
@@ -37,6 +42,7 @@ Work_Life_Balance_Manager_Ready/
 ├── app.py
 ├── database.py
 ├── notifications.py
+├── suggestions.py         # weekly balance score + free-time suggestions
 ├── scheduler.py
 ├── requirements.txt
 ├── .env.example
@@ -44,7 +50,14 @@ Work_Life_Balance_Manager_Ready/
 ├── run_app.bat
 ├── run_scheduler.bat
 ├── run_tests.bat
+├── setup.bat              # one-click install (venv + dependencies + .env)
+├── scripts/
+│   ├── check_notifications.py  # go-live checker (config / email / sms / voice)
+│   └── test_sendgrid.py   # optional manual email check
 ├── tests/
+│   ├── test_app_structure.py
+│   ├── test_notifications.py
+│   ├── test_suggestions.py
 │   ├── test_database.py
 │   └── test_planner_and_scheduler.py
 └── data/                  # SQLite database is created here at first run
@@ -52,7 +65,9 @@ Work_Life_Balance_Manager_Ready/
 
 ## Windows setup
 
-Open this folder in VS Code. In the integrated terminal, run:
+Quick way: double-click `setup.bat`, then `run_app.bat`.
+
+Manual way: open this folder in VS Code. In the integrated terminal, run:
 
 ```powershell
 py -m venv .venv
@@ -105,7 +120,7 @@ The scheduler runs a check immediately at startup and then every 15 seconds. It 
 
 Notifications are optional. The dashboard and planner work without provider credentials.
 
-1. Copy `.env.example` to a new file named `.env` in the project root.
+1. Copy `.env.example` to `.env` in the project root (`setup.bat` does this for you). `NOTIFICATION_TO_PHONE` and `NOTIFICATION_TO_EMAIL` are where reminders are delivered.
 2. Add your own current Twilio and SendGrid values to `.env` locally.
 3. Use provider-approved sender details and recipients.
 4. Keep `.env` private. Never upload it, commit it, or share screenshots of it.
@@ -120,7 +135,7 @@ Run:
 python -m unittest discover -s tests -v
 ```
 
-The current package was validated with **15 passing tests**. The suite checks activity CRUD and validation, planner reminder creation/edit/status/delete behaviour, and reminder processing using mocked senders. The tests do not make real SMS messages, calls or emails and use temporary databases instead of the user's local database.
+The current package was validated with **51 passing tests**. The suite checks activity CRUD and validation, planner reminder creation/edit/status/delete behaviour, and reminder processing using mocked senders. The tests do not make real SMS messages, calls or emails and use temporary databases instead of the user's local database.
 
 ## Database and backups
 

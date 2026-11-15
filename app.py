@@ -13,6 +13,14 @@ from database import (
     update_planned_activity_status,
     delete_planned_activity,
     load_reminder_history,
+    mark_overdue_activities_failed,
+)
+from suggestions import (
+    weekly_balance,
+    planned_windows_today,
+    pending_planned_hours,
+    remaining_today,
+    suggest_activities,
 )
 
 import sqlite3
@@ -832,6 +840,98 @@ else:
 
 
 # =========================================================
+# 9B. WEEKLY BALANCE SCORE AND SMART SUGGESTIONS
+# =========================================================
+
+st.divider()
+st.header("🧠 Balance Score & Smart Suggestions")
+st.caption(
+    "Your last 7 days are compared with weekly targets for each life area. "
+    "Free time left today is then filled with what you have neglected most."
+)
+
+now_ist = datetime.now(ZoneInfo("Asia/Kolkata")).replace(tzinfo=None)
+today_ist = now_ist.date()
+
+try:
+    week_df = load_activities(today_ist - timedelta(days=6), today_ist)
+    todays_plans = load_planned_activities(today_ist, today_ist)
+    logged_today = get_daily_total(today_ist)
+except (sqlite3.Error, pd.errors.DatabaseError) as error:
+    st.error(f"Could not load data for suggestions: {error}")
+    week_df, todays_plans, logged_today = pd.DataFrame(), pd.DataFrame(), 0.0
+
+weekly = weekly_balance(week_df, today_ist)
+plan_windows = planned_windows_today(todays_plans, now_ist)
+pending_hours = pending_planned_hours(plan_windows, now_ist)
+free_hours = remaining_today(logged_today, pending_hours)
+
+score_col, logged_col, planned_col, free_col = st.columns(4)
+score_col.metric(
+    "⚖️ Weekly balance score",
+    "—" if weekly["score"] is None else f"{weekly['score']} / 100",
+    weekly["label"],
+    delta_color="off",
+)
+logged_col.metric("✅ Logged today", f"{logged_today:.2f} h")
+planned_col.metric("📅 Planned (still ahead)", f"{pending_hours:.2f} h")
+free_col.metric("🆓 Unplanned today", f"{free_hours:.2f} h")
+
+if weekly["rows"]:
+    chart_rows = []
+    for row in weekly["rows"]:
+        chart_rows.append({"Category": row["category"], "Hours": row["actual"], "Type": "Logged"})
+        chart_rows.append({"Category": row["category"], "Hours": row["target"], "Type": "Target / limit"})
+    balance_fig = px.bar(
+        pd.DataFrame(chart_rows),
+        x="Category",
+        y="Hours",
+        color="Type",
+        barmode="group",
+        title=f"Logged vs target ({weekly['active_days']} active day(s) in the last 7)",
+    )
+    st.plotly_chart(balance_fig, use_container_width=True)
+
+st.subheader("💡 Suggested plan for the rest of today")
+suggestions, suggestion_tips = suggest_activities(
+    now_ist, plan_windows, weekly, free_hours
+)
+
+for tip in suggestion_tips:
+    st.info(tip)
+
+for index, item in enumerate(suggestions):
+    text_col, button_col = st.columns([4, 1])
+    with text_col:
+        st.markdown(
+            f"**🕒 {item['start']:%H:%M} – {item['end']:%H:%M} · "
+            f"{item['category']}** ({item['hours']:.2f} h)"
+        )
+        st.caption(item["reason"])
+    with button_col:
+        if st.button(
+            "➕ Add to plan",
+            key=f"add_suggestion_{index}_{item['category']}_{item['start']:%H%M}",
+            use_container_width=True,
+        ):
+            try:
+                saved, message = save_planned_activity(
+                    today_ist,
+                    item["category"],
+                    f"{item['start']:%H:%M}",
+                    f"{item['end']:%H:%M}",
+                    "Suggested by balance assistant",
+                )
+                if saved:
+                    st.success(message)
+                    st.rerun()
+                else:
+                    st.error(message)
+            except sqlite3.Error as error:
+                st.error(f"Could not save planned activity: {error}")
+
+
+# =========================================================
 # 10. ACTIVITY PLANNER
 # =========================================================
 
@@ -917,6 +1017,7 @@ with planner_tab_manage:
         st.error("The start date cannot be later than the end date.")
     else:
         try:
+            mark_overdue_activities_failed()
             planned_df = load_planned_activities(planner_from, planner_to)
         except sqlite3.Error as error:
             st.error(f"Could not load planned activities: {error}")
@@ -953,6 +1054,7 @@ with planner_tab_manage:
                 is_planned & (plan_rows["_start_dt"] > due_window_end)
             ].copy()
             completed_df = plan_rows[plan_rows["status"].eq("Completed")].copy()
+            activity_failed_df = plan_rows[plan_rows["status"].eq("Failed")].copy()
 
             try:
                 reminder_df = load_reminder_history(planner_from, planner_to)
@@ -997,6 +1099,10 @@ with planner_tab_manage:
                 view = frame.drop(columns=[c for c in ["_start_dt", "_end_dt"] if c in frame.columns]).copy()
                 view["activity_date"] = view["activity_date"].astype(str)
                 columns = ["id", "activity_date", "start_time", "end_time", "activity_type", "status", "notes"]
+                if "activity_failure_reason" in view.columns:
+                    columns.append("activity_failure_reason")
+                view = view.rename(columns={"activity_failure_reason": "why_failed"})
+                columns = ["why_failed" if c == "activity_failure_reason" else c for c in columns]
                 st.dataframe(view[columns], use_container_width=True, hide_index=True)
 
             def _show_reminder_table(frame):
@@ -1013,7 +1119,8 @@ with planner_tab_manage:
                 f"🟢 Active ({len(active_df)})",
                 f"⏰ Due in 5 min ({len(due_soon_df)})",
                 f"📅 Upcoming ({len(upcoming_df)})",
-                f"❌ Failed ({len(failed_df)})",
+                f"❌ Activity Failed ({len(activity_failed_df)})",
+                f"📨 Notification Failed ({len(failed_df)})",
                 f"📨 Sent ({len(sent_df)})",
                 f"✅ Completed ({len(completed_df)})",
             ])
@@ -1021,17 +1128,21 @@ with planner_tab_manage:
                 _show_plan_table(active_df)
             with status_tabs[1]:
                 _show_reminder_table(due_soon_df)
-                st.caption("These are pending SMS, voice and email reminders scheduled between now and the next five minutes. Keep scheduler.py running for delivery.")
+                st.caption("These are pending reminders (email, Telegram, SMS or voice, depending on ENABLED_CHANNELS) scheduled between now and the next five minutes. Keep scheduler.py running for delivery.")
             with status_tabs[2]:
                 _show_plan_table(upcoming_df)
             with status_tabs[3]:
-                _show_reminder_table(failed_df)
-                st.caption("Failed refers to notification attempts, not the activity itself. Review the failure reason before retrying.")
+                _show_plan_table(activity_failed_df)
+                st.caption("Activity Failed means its planned end time passed while it was still marked Planned. This status is independent of notification delivery. If you did complete it, select it below and set the status to Completed, and its hours will be added to the dashboard.")
             with status_tabs[4]:
+                _show_reminder_table(failed_df)
+                st.caption("Notification Failed applies only to the individual email, Telegram, SMS or voice attempt. It does not change the activity status.")
+            with status_tabs[5]:
                 _show_reminder_table(sent_df)
                 st.caption("Sent means the provider accepted the notification request. Check the provider dashboard for final delivery details.")
-            with status_tabs[5]:
+            with status_tabs[6]:
                 _show_plan_table(completed_df)
+                st.caption("Completed plans are added automatically to the dashboard activity log (duration = end time minus start time, within the 24-hour daily limit).")
 
             st.divider()
             st.subheader("All planned activities")
@@ -1039,7 +1150,7 @@ with planner_tab_manage:
             display_plans["activity_date"] = display_plans["activity_date"].astype(str)
             st.dataframe(
                 display_plans[
-                    ["id", "activity_date", "start_time", "end_time", "activity_type", "status", "notes"]
+                    ["id", "activity_date", "start_time", "end_time", "activity_type", "status", "notes", "activity_failure_reason"]
                 ],
                 use_container_width=True,
                 hide_index=True,
@@ -1123,7 +1234,7 @@ with planner_tab_manage:
 
             status_col, delete_col = st.columns(2)
             with status_col:
-                status_options = ["Planned", "Completed", "Cancelled"]
+                status_options = ["Planned", "Completed", "Failed", "Cancelled"]
                 current_status = str(selected_plan["status"])
                 if current_status not in status_options:
                     current_status = "Planned"

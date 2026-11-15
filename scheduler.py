@@ -5,8 +5,8 @@ from zoneinfo import ZoneInfo
 
 from apscheduler.schedulers.blocking import BlockingScheduler
 
-from database import get_connection
-from notifications import send_sms, send_voice_call, send_email
+from database import get_connection, get_enabled_channels, mark_overdue_activities_failed
+from notifications import send_sms, send_voice_call, send_email, send_telegram
 
 
 TIMEZONE = ZoneInfo("Asia/Kolkata")
@@ -25,6 +25,9 @@ def process_due_reminders(dry_run=True, sender_functions=None):
     """
 
     now = datetime.now(TIMEZONE)
+
+    # Activity failure is tracked separately from SMS/voice/email outcomes.
+    mark_overdue_activities_failed(now=now)
 
     with get_connection() as conn:
         reminders = conn.execute(
@@ -79,8 +82,10 @@ def process_due_reminders(dry_run=True, sender_functions=None):
     senders = sender_functions or {
         "sms": send_sms,
         "voice": send_voice_call,
-        "email": send_email
+        "email": send_email,
+        "telegram": send_telegram,
     }
+    enabled_channels = get_enabled_channels()
 
     results = []
 
@@ -88,6 +93,19 @@ def process_due_reminders(dry_run=True, sender_functions=None):
         reminder_id = reminder[0]
         activity_id = reminder[1]
         channel = reminder[3]
+
+        # Channels switched off in .env (ENABLED_CHANNELS) are skipped, not failed.
+        if channel not in enabled_channels:
+            with get_connection() as conn:
+                conn.execute(
+                    "UPDATE reminders SET status = 'Skipped', failure_reason = ? "
+                    "WHERE id = ? AND status = 'Pending'",
+                    ("Channel is disabled in ENABLED_CHANNELS (.env).", reminder_id),
+                )
+                conn.commit()
+            results.append({"reminder_id": reminder_id, "channel": channel,
+                            "status": "Skipped", "response": "channel disabled"})
+            continue
 
         # Claim the reminder to prevent concurrent duplicate processing.
         with get_connection() as conn:
@@ -121,8 +139,27 @@ def process_due_reminders(dry_run=True, sender_functions=None):
             f"starts at {activity_start} on {activity_date}."
         )
 
+        # A reminder that arrives after the activity began would be misleading
+        # (for example when the PC was off). Record it as missed instead.
         try:
-            if channel == "sms":
+            start_moment = datetime.fromisoformat(
+                f"{activity_date}T{activity_start}"
+            ).replace(tzinfo=TIMEZONE)
+        except ValueError:
+            start_moment = None
+        already_started = (
+            start_moment is not None and datetime.now(TIMEZONE) >= start_moment
+        )
+
+        try:
+            if already_started:
+                success = False
+                response = (
+                    "Missed: the activity had already started when this "
+                    "reminder became due (was scheduler.py running?)."
+                )
+
+            elif channel == "sms":
                 success, response = senders["sms"](
                     os.getenv("NOTIFICATION_TO_PHONE"),
                     message
@@ -140,6 +177,9 @@ def process_due_reminders(dry_run=True, sender_functions=None):
                     "Upcoming Activity Reminder",
                     message
                 )
+
+            elif channel == "telegram":
+                success, response = senders["telegram"](message)
 
             else:
                 success = False

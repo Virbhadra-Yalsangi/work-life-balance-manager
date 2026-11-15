@@ -8,6 +8,8 @@ from zoneinfo import ZoneInfo
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
+import os
+os.environ["ENABLED_CHANNELS"] = "sms,voice,email"  # tests must not depend on your .env
 import database as db
 import scheduler
 
@@ -113,3 +115,62 @@ class TestReminderProcessing(IsolatedDatabaseTest):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestCompletedPlanLogsHours(IsolatedDatabaseTest):
+    def activities(self):
+        with db.get_connection() as conn:
+            return conn.execute(
+                "SELECT activity_type, duration_hours, planned_activity_id FROM activities"
+            ).fetchall()
+
+    def test_completed_plan_is_added_to_dashboard_log(self):
+        activity_id = self.create_future_plan()  # 10:00-11:00 = 1 hour
+        changed, message = db.update_planned_activity_status(activity_id, "Completed")
+        self.assertTrue(changed, message)
+        self.assertEqual(self.activities(), [("Study", 1.0, activity_id)])
+
+    def test_completing_twice_does_not_duplicate(self):
+        activity_id = self.create_future_plan()
+        db.update_planned_activity_status(activity_id, "Completed")
+        db.update_planned_activity_status(activity_id, "Completed")
+        self.assertEqual(len(self.activities()), 1)
+
+    def test_reopening_plan_removes_logged_hours(self):
+        activity_id = self.create_future_plan()
+        db.update_planned_activity_status(activity_id, "Completed")
+        db.update_planned_activity_status(activity_id, "Cancelled")
+        self.assertEqual(self.activities(), [])
+
+    def test_failed_plan_can_be_completed_later(self):
+        activity_id = self.create_future_plan()
+        with db.get_connection() as conn:
+            conn.execute("UPDATE planned_activities SET status='Failed' WHERE id=?", (activity_id,))
+            conn.commit()
+        db.update_planned_activity_status(activity_id, "Completed")
+        self.assertEqual(len(self.activities()), 1)
+
+    def test_over_24_hours_is_not_logged(self):
+        activity_id = self.create_future_plan()
+        with db.get_connection() as conn:
+            day = conn.execute("SELECT activity_date FROM planned_activities WHERE id=?", (activity_id,)).fetchone()[0]
+        db.save_activity(date.fromisoformat(day), "Sleep", 24, "")
+        changed, message = db.update_planned_activity_status(activity_id, "Completed")
+        self.assertTrue(changed)
+        self.assertIn("NOT added", message)
+        self.assertEqual(len(self.activities()), 1)  # only the 24 h Sleep record
+
+    def test_delete_plan_keeps_logged_hours(self):
+        activity_id = self.create_future_plan()
+        db.update_planned_activity_status(activity_id, "Completed")
+        db.delete_planned_activity(activity_id)
+        self.assertEqual(self.activities(), [("Study", 1.0, None)])
+
+    def test_failure_reason_explains_why(self):
+        activity_id = self.create_future_plan()
+        later = datetime.now(TZ) + timedelta(days=5)
+        db.mark_overdue_activities_failed(now=later)
+        with db.get_connection() as conn:
+            reason = conn.execute("SELECT activity_failure_reason FROM planned_activities WHERE id=?", (activity_id,)).fetchone()[0]
+        self.assertIn("10:00 to 11:00", reason)
+        self.assertIn("not marked Completed", reason)

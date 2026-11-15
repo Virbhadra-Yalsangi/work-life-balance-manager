@@ -17,12 +17,12 @@ People estimate their time from memory and rarely notice when work crowds out sl
 - **Plotly** renders interactive charts.
 - **suggestions.py** is a pure-Python module (no UI, no database) so the scoring and scheduling rules are easy to test.
 - **APScheduler** drives a separate reminder worker. **SendGrid** (email) and the **Telegram Bot API** deliver reminders. **Twilio** (SMS and voice) is supported but needs a paid account for custom messages.
-- **unittest** verifies database, planner, scheduler, notification and suggestion logic with mocks and temporary databases. **GitHub Actions** runs the 51 tests on every pull request.
+- **unittest** verifies database, planner, scheduler, notification and suggestion logic with mocks and temporary databases. **GitHub Actions** runs the 66 tests on every pull request.
 
 ## What makes it more than a tracker
 
 1. **Completed plans update the dashboard automatically.** Marking a plan Completed adds its duration to the activity log, within the 24-hour daily limit, without double counting.
-2. **Weekly balance score (0 to 100).** The last 7 days are compared with weekly targets per category (for example sleep minimum, work maximum). Targets scale with the number of active days, so a new user is not penalised.
+2. **Weekly balance score (0 to 100) with user-defined goals.** The last 7 days are compared with weekly goals per category (for example sleep minimum, work maximum). Users set their own goals in the app, with validation, and goals scale with the number of active days so a new user is not penalised.
 3. **Smart suggestions for free time.** Free gaps between now and bedtime are found after removing planned activities. The most neglected categories are placed into those gaps at sensible times of day (no exercise at 10 pm), with a one-click Add to plan.
 4. **Clear failure reasons.** A plan whose end time passes while still Planned becomes Failed with the exact time window and a hint to mark it Completed if it was done.
 5. **Reliable reminders.** One reminder per enabled channel, five minutes before the start. A reminder that would arrive after the activity has begun is recorded as Missed instead of being sent.
@@ -31,7 +31,7 @@ People estimate their time from memory and rarely notice when work crowds out sl
 
 1. Add a sample activity such as Study for 1.5 hours and point out the KPI cards.
 2. Change the date range and show how the charts respond. Download the filtered CSV.
-3. Open **Balance Score & Smart Suggestions**. Explain the score, the free hours left today, and a suggestion with its reason.
+3. Open **Balance Score & Smart Suggestions**. Open **My weekly goals**, raise the Exercise goal, save, and show the score and suggestions change. Explain the score, the free hours left today, and a suggestion with its reason.
 4. Click **Add to plan** on a suggestion. Show the new plan in the planner.
 5. Mark a plan Completed and show its hours appear in the dashboard log.
 6. Show a Failed plan and its failure reason.

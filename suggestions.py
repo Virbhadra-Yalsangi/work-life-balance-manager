@@ -33,6 +33,48 @@ WEEKLY_TARGETS = {
     "Study": ("min", 5.0),
 }
 
+MAX_WEEKLY_HOURS = 168  # hours in a week
+
+
+def merge_goals(saved):
+    """
+    Combine the user's saved weekly hours with the defaults.
+
+    `saved` is {category: hours}. Missing, invalid or out-of-range values fall
+    back to the default. Returns {category: (kind, hours)} for every category.
+    """
+    saved = saved or {}
+    goals = {}
+    for category, (kind, default_hours) in WEEKLY_TARGETS.items():
+        try:
+            hours = float(saved.get(category))
+        except (TypeError, ValueError):
+            hours = None
+        if hours is None or hours != hours or not 0 <= hours <= MAX_WEEKLY_HOURS:
+            hours = default_hours
+        goals[category] = (kind, round(hours, 2))
+    return goals
+
+
+def validate_goals(hours_by_category):
+    """Return a list of problems with the goals (empty list = valid)."""
+    errors = []
+    minimum_total = 0.0
+    for category, (kind, _) in WEEKLY_TARGETS.items():
+        hours = hours_by_category.get(category)
+        if hours is None or not 0 <= hours <= MAX_WEEKLY_HOURS:
+            errors.append(f"{category}: enter hours between 0 and {MAX_WEEKLY_HOURS}.")
+            continue
+        if kind == "min":
+            minimum_total += hours
+    if minimum_total > MAX_WEEKLY_HOURS:
+        errors.append(
+            f"Your 'at least' goals add up to {minimum_total:.1f} h, but a week "
+            f"only has {MAX_WEEKLY_HOURS} h. Lower some goals."
+        )
+    return errors
+
+
 # Typical length (hours) of one session of each category.
 SESSION_HOURS = {
     "Exercise": 0.75,
@@ -81,12 +123,14 @@ def _hours(delta):
 # Weekly balance score
 # --------------------------------------------------------------------------
 
-def weekly_balance(activities_df, today):
+def weekly_balance(activities_df, today, targets=None):
     """
     Compare the last 7 days (including today) with WEEKLY_TARGETS.
 
     Targets are scaled by the number of days that actually have records, so a
     new user with 2 days of data is not punished for the other 5 days.
+    `targets` is {category: (kind, weekly_hours)}; it defaults to WEEKLY_TARGETS
+    (use merge_goals() to apply the user's own goals).
     Returns a dict with: score (0-100 or None), label, active_days, rows.
     """
     window_start = today - timedelta(days=6)
@@ -108,15 +152,20 @@ def weekly_balance(activities_df, today):
 
     scale = active_days / 7
     rows = []
-    for category, (kind, weekly_target) in WEEKLY_TARGETS.items():
+    for category, (kind, weekly_target) in (targets or WEEKLY_TARGETS).items():
         target = weekly_target * scale
         actual = float(totals.get(category, 0.0))
         if kind == "min":
-            ratio = min(actual / target, 1.0)
+            ratio = 1.0 if target <= 0 else min(actual / target, 1.0)
             gap, excess = max(target - actual, 0.0), 0.0
         else:  # "max"
             excess = max(actual - target, 0.0)
-            ratio = 1.0 if excess == 0 else max(0.0, 1.0 - excess / target)
+            if excess == 0:
+                ratio = 1.0
+            elif target <= 0:
+                ratio = 0.0
+            else:
+                ratio = max(0.0, 1.0 - excess / target)
             gap = 0.0
         rows.append(
             {

@@ -101,6 +101,15 @@ def initialize_database():
         if "planned_activity_id" not in activity_columns:
             conn.execute("ALTER TABLE activities ADD COLUMN planned_activity_id INTEGER")
 
+        # The user's own weekly goals (hours per week per category).
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS category_goals (
+                category TEXT PRIMARY KEY,
+                weekly_hours REAL NOT NULL,
+                updated_at TEXT NOT NULL DEFAULT ''
+            )
+        """)
+
         conn.execute("""
             CREATE TABLE IF NOT EXISTS planned_activities (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -410,6 +419,39 @@ def _build_reminder_values(activity_id, activity_date, start_time, now=None):
         (activity_id, reminder_text, channel, "Pending", created_text)
         for channel in sorted(get_enabled_channels())
     ]
+
+
+def load_goal_hours():
+    """Return the user's saved weekly goals as {category: hours}."""
+    with get_connection() as conn:
+        rows = conn.execute(
+            "SELECT category, weekly_hours FROM category_goals"
+        ).fetchall()
+    return {category: hours for category, hours in rows}
+
+
+def save_goal_hours(hours_by_category):
+    """Save (insert or overwrite) weekly goals in one transaction."""
+    stamp = datetime.now().isoformat(timespec="seconds")
+    with get_connection() as conn:
+        conn.executemany(
+            """
+            INSERT INTO category_goals (category, weekly_hours, updated_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(category) DO UPDATE SET
+                weekly_hours = excluded.weekly_hours,
+                updated_at = excluded.updated_at
+            """,
+            [(c, float(h), stamp) for c, h in hours_by_category.items()],
+        )
+        conn.commit()
+
+
+def reset_goal_hours():
+    """Delete the saved goals so the defaults apply again."""
+    with get_connection() as conn:
+        conn.execute("DELETE FROM category_goals")
+        conn.commit()
 
 
 def _sync_completed_activity(conn, record_id):

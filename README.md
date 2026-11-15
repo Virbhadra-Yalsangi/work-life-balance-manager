@@ -15,9 +15,10 @@ A local-first activity tracking and analytics application built with Python, Str
 - Edit, complete, cancel and delete planned activities.
 - Create one reminder per enabled channel (email, Telegram, and optionally SMS and voice) five minutes before a planned activity, provided that reminder time is still in the future when the plan is saved or edited.
 - Marking a plan **Completed** automatically adds its hours (end minus start) to the dashboard activity log, within the 24-hour daily limit. Changing it back, or editing its times, updates that record. Deleting a plan keeps the hours already logged.
-- **Weekly balance score and smart suggestions** (`suggestions.py`): the last 7 days are compared with weekly targets per category and given a 0-100 score. Free time left today (after planned activities, before 22:30) is filled with the most neglected categories at sensible times of day, each with a one-click **Add to plan** button. Change the targets in `WEEKLY_TARGETS` at the top of `suggestions.py`.
+- **Weekly balance score and smart suggestions** (`suggestions.py`): the last 7 days are compared with weekly targets per category and given a 0-100 score. Free time left today (after planned activities, before 22:30) is filled with the most neglected categories at sensible times of day, each with a one-click **Add to plan** button. The defaults are in `WEEKLY_TARGETS` at the top of `suggestions.py`; users change them in the app under **My weekly goals**.
 - **Channels**: set `ENABLED_CHANNELS` in `.env` (e.g. `email,telegram`). Only those channels get reminders; old reminders for other channels are marked Skipped. Twilio *trial* accounts cannot send custom SMS or voice (templates only), so use email + Telegram until you upgrade. Telegram setup: create a bot with @BotFather, put its token in `TELEGRAM_BOT_TOKEN`, press START in the bot, then run `scripts/check_notifications.py telegram-id` to get `TELEGRAM_CHAT_ID`.
 - **Go-live checker**: `scripts/check_notifications.py` validates `.env` (without printing secrets) and sends one test email, SMS or call, then shows the real Twilio delivery status and error code. Phone numbers are accepted as `98765 43210` or `+91...`. A reminder that would arrive after the activity already started is recorded as Failed ("Missed") instead of being sent.
+- **My weekly goals**: set your own hours per week for each category (for example Sleep, Exercise, Work limit) in the app. Goals are saved in the local database, used by the balance score and suggestions, validated (0-168 h, and 'at least' goals cannot add up to more than a week), and can be reset to the defaults.
 - Failed plans show a clear reason (planned time window and why it failed) and can still be set to Completed if you did the activity.
 - Run the reminder scheduler as a separate process. It checks every 15 seconds and prints each processing result.
 - Run automated database and reminder tests using isolated temporary SQLite databases and mocked notification senders.
@@ -57,6 +58,7 @@ Work_Life_Balance_Manager_Ready/
 │   └── test_sendgrid.py   # optional manual email check
 ├── tests/
 │   ├── test_app_structure.py
+│   ├── test_goals.py
 │   ├── test_notifications.py
 │   ├── test_suggestions.py
 │   ├── test_database.py
@@ -139,7 +141,7 @@ Run:
 python -m unittest discover -s tests -v
 ```
 
-The current version was validated with **51 passing tests**. The suite checks activity CRUD and validation, planner reminder creation/edit/status/delete behaviour, automatic logging of completed plans, the weekly balance score and suggestion logic, phone-number normalisation, the Telegram sender, enabled-channel handling, and reminder processing using mocked senders. The tests do not send real SMS messages, calls, emails or Telegram messages, use temporary databases, and ignore your personal `.env` so results are the same on every computer.
+The current version was validated with **66 passing tests**. The suite checks activity CRUD and validation, planner reminder creation/edit/status/delete behaviour, automatic logging of completed plans, the weekly balance score, goals and suggestion logic, phone-number normalisation, the Telegram sender, enabled-channel handling, and reminder processing using mocked senders. The tests do not send real SMS messages, calls, emails or Telegram messages, use temporary databases, and ignore your personal `.env` so results are the same on every computer.
 
 ## Database and backups
 
@@ -162,7 +164,7 @@ The app creates `data/work_life_balance.db` automatically. Existing databases ar
 - This is a local portfolio application, not a multi-user hosted service. It does not include user authentication or cloud database hosting.
 - Notifications depend on third-party services and a continuously running local scheduler.
 - Live email and Telegram reminders were verified by the author. Live SMS and voice were not, because Twilio trial accounts only allow template messages.
-- The weekly targets in `suggestions.py` are sensible defaults, not medical or clinical advice. Edit them to fit your own life.
+- The default weekly goals are sensible starting points, not medical or clinical advice. Change them under My weekly goals to fit your own life.
 - A process interruption during an in-flight provider request can require manual reconciliation with the provider dashboard before retrying, to avoid duplicate messages.
 - The dashboard reflects logged data; it does not automatically detect actual sleep, work or exercise.
 

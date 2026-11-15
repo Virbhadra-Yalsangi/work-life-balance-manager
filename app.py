@@ -14,8 +14,14 @@ from database import (
     delete_planned_activity,
     load_reminder_history,
     mark_overdue_activities_failed,
+    load_goal_hours,
+    save_goal_hours,
+    reset_goal_hours,
 )
 from suggestions import (
+    WEEKLY_TARGETS,
+    merge_goals,
+    validate_goals,
     weekly_balance,
     planned_windows_today,
     pending_planned_hours,
@@ -857,11 +863,13 @@ try:
     week_df = load_activities(today_ist - timedelta(days=6), today_ist)
     todays_plans = load_planned_activities(today_ist, today_ist)
     logged_today = get_daily_total(today_ist)
+    goals = merge_goals(load_goal_hours())
 except (sqlite3.Error, pd.errors.DatabaseError) as error:
     st.error(f"Could not load data for suggestions: {error}")
     week_df, todays_plans, logged_today = pd.DataFrame(), pd.DataFrame(), 0.0
+    goals = merge_goals({})
 
-weekly = weekly_balance(week_df, today_ist)
+weekly = weekly_balance(week_df, today_ist, goals)
 plan_windows = planned_windows_today(todays_plans, now_ist)
 pending_hours = pending_planned_hours(plan_windows, now_ist)
 free_hours = remaining_today(logged_today, pending_hours)
@@ -891,6 +899,64 @@ if weekly["rows"]:
         title=f"Logged vs target ({weekly['active_days']} active day(s) in the last 7)",
     )
     st.plotly_chart(balance_fig, use_container_width=True)
+
+def _reset_goals_callback():
+    """Runs before the page reloads, so it may safely reset the inputs."""
+    try:
+        reset_goal_hours()
+        for goal_category, (_, default_hours) in WEEKLY_TARGETS.items():
+            st.session_state[f"goal_{goal_category}"] = float(default_hours)
+        st.session_state["goals_message"] = ("success", "Goals reset to the defaults.")
+    except sqlite3.Error as error:
+        st.session_state["goals_message"] = ("error", f"Could not reset goals: {error}")
+
+
+with st.expander("⚙️ My weekly goals", expanded=False):
+    st.caption(
+        "Set how many hours per week you want for each area. 'At least' goals "
+        "are minimums to reach; 'at most' is a limit (for example work). The "
+        "score and suggestions above use these numbers."
+    )
+    for goal_category, (_, _) in goals.items():
+        st.session_state.setdefault(f"goal_{goal_category}", float(goals[goal_category][1]))
+
+    with st.form("goals_form"):
+        goal_cols = st.columns(2)
+        new_goals = {}
+        for position, (goal_category, (goal_kind, _)) in enumerate(WEEKLY_TARGETS.items()):
+            limit_word = "at most" if goal_kind == "max" else "at least"
+            new_goals[goal_category] = goal_cols[position % 2].number_input(
+                f"{goal_category} ({limit_word}, h/week)",
+                min_value=0.0,
+                max_value=168.0,
+                step=0.5,
+                key=f"goal_{goal_category}",
+            )
+        goals_submitted = st.form_submit_button("💾 Save goals")
+
+    st.button("↩️ Reset to defaults", on_click=_reset_goals_callback)
+
+    minimum_total = sum(
+        hours for name, hours in new_goals.items() if WEEKLY_TARGETS[name][0] == "min"
+    )
+    st.caption(f"Your 'at least' goals add up to {minimum_total:.1f} of 168 hours in a week.")
+
+    goals_message = st.session_state.pop("goals_message", None)
+    if goals_message:
+        (st.success if goals_message[0] == "success" else st.error)(goals_message[1])
+
+    if goals_submitted:
+        goal_errors = validate_goals(new_goals)
+        if goal_errors:
+            for goal_error in goal_errors:
+                st.error(goal_error)
+        else:
+            try:
+                save_goal_hours(new_goals)
+                st.session_state["goals_message"] = ("success", "Goals saved.")
+                st.rerun()
+            except sqlite3.Error as error:
+                st.error(f"Could not save goals: {error}")
 
 st.subheader("💡 Suggested plan for the rest of today")
 suggestions, suggestion_tips = suggest_activities(

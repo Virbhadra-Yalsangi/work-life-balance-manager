@@ -1,5 +1,14 @@
 # Release notes: Work-Life Balance Manager
 
+## Version 2.1
+
+### Added
+- **My weekly goals** screen: set hours per week for each category in the app. Saved in the database, validated, resettable to defaults, and used by the balance score and suggestions.
+- 15 new tests (66 in total) covering goal merging, validation, scoring with custom goals and storage.
+
+### Fixed
+- Scoring no longer divides by zero when a goal is set to 0 hours.
+
 ## Version 2
 
 ### Added

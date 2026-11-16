@@ -49,6 +49,13 @@ import pandas as pd
 import plotly.express as px
 import streamlit as st
 
+# Load Streamlit Cloud Secrets into environment variables automatically
+try:
+    for _k, _v in st.secrets.items():
+        if isinstance(_v, str) and _v.strip():
+            os.environ[_k] = _v.strip()
+except Exception:
+    pass
 
 # =========================================================
 # 1. CONFIGURATION AND DATABASE PATH

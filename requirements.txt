@@ -1,0 +1,9 @@
+streamlit
+pandas
+plotly
+twilio
+sendgrid
+python-dotenv
+APScheduler>=3.10,<4
+requests
+google-genai

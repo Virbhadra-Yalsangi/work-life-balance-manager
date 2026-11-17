@@ -60,7 +60,7 @@ User message:
 """
     try:
         response = client.models.generate_content(
-            model="gemini-2.0-flash",
+            model="gemini-3.8-flash",
             contents=prompt,
         )
         raw = response.text.strip()
@@ -83,6 +83,10 @@ User message:
             })
         return cleaned, None
     except Exception as exc:
+        # Fallback friendly message for 503 / high demand / timeout
+        err_str = str(exc)
+        if "503" in err_str or "UNAVAILABLE" in err_str:
+            return [], "AI server is currently experiencing high demand (503). Please try again in 10 seconds or use the 'Manual' tab to log instantly."
         return [], f"Could not parse text with AI: {exc}"
 
 
@@ -114,9 +118,12 @@ Keep it friendly, crisp, and under 220 words.
 """
     try:
         response = client.models.generate_content(
-            model="gemini-2.0-flash",
+            model="gemini-3.8-flash",
             contents=prompt,
         )
         return response.text.strip(), None
     except Exception as exc:
+        err_str = str(exc)
+        if "503" in err_str or "UNAVAILABLE" in err_str:
+            return None, "AI Coach is temporarily busy due to high traffic (503). Please click 'Generate' again in a moment."
         return None, f"AI Coach error: {exc}"

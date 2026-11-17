@@ -13,11 +13,7 @@ def get_db_connection():
     conn.row_factory = sqlite3.Row
     return conn
 
-# DIRECT FUNCTIONS CALLED BY APP.PY
 def send_telegram(message):
-    """
-    app.py द्वारे थेट कॉल होणारे फंक्शन (Telegram)
-    """
     token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
     chat_id = os.getenv("TELEGRAM_CHAT_ID", "").strip()
     if not token or not chat_id:
@@ -34,22 +30,40 @@ def send_telegram(message):
     except Exception as e:
         return False, str(e)
 
-def send_email(subject_or_msg, body=None):
+def send_email(*args, **kwargs):
     """
-    app.py द्वारे थेट कॉल होणारे फंक्शन (Email)
+    Flexible email sender that accepts 1, 2, or 3 arguments dynamically 
+    to prevent any TypeError from app.py.
     """
     api_key = os.getenv("SENDGRID_API_KEY", "").strip()
     from_email = os.getenv("SENDGRID_FROM_EMAIL", "").strip()
-    to_email = os.getenv("NOTIFICATION_TO_EMAIL", "").strip()
+    default_to_email = os.getenv("NOTIFICATION_TO_EMAIL", "").strip()
     
+    to_email = default_to_email
+    subject = "Work-Life Balance Alert"
+    body = ""
+    
+    # Handle positional arguments passed from app.py
+    if len(args) == 3:
+        to_email, subject, body = args
+    elif len(args) == 2:
+        subject, body = args
+    elif len(args) == 1:
+        body = args[0]
+        
+    # Override with kwargs if provided
+    if "to_email" in kwargs:
+        to_email = kwargs["to_email"]
+    if "subject" in kwargs:
+        subject = kwargs["subject"]
+    if "body" in kwargs:
+        body = kwargs["body"]
+        
+    if not to_email:
+        to_email = default_to_email
+
     if not api_key or not from_email or not to_email:
         return False, "SendGrid credentials missing."
-    
-    subject = "Work-Life Balance Alert"
-    if body is not None:
-        subject = subject_or_msg
-    else:
-        body = subject_or_msg
 
     url = "https://api.sendgrid.com/v3/mail/send"
     headers = {
@@ -87,7 +101,7 @@ def process_pending_reminders():
             if channel == "telegram":
                 success, err_msg = send_telegram(msg)
             elif channel == "email":
-                success, err_msg = send_email("Work-Life Balance Alert", msg)
+                success, err_msg = send_email(msg)
                 
             if success:
                 cursor.execute(

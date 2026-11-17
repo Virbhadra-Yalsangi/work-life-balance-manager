@@ -448,8 +448,9 @@ for card_column, (card_key, card_label, card_value, card_note) in zip(
         card_active = st.session_state["panel"] == card_key
         st.metric(card_label, card_value)
         st.caption(card_note)
+        btn_text = f"Showing {card_label.split()[1]}" if card_active else f"Open {card_label.split()[1]}"
         st.button(
-            "Showing" if card_active else "Open",
+            btn_text,
             key=f"open_{card_key}",
             on_click=_open_panel,
             args=(card_key,),

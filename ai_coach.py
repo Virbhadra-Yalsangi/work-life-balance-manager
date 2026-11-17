@@ -60,7 +60,7 @@ User message:
 """
     try:
         response = client.models.generate_content(
-            model="gemini-3.8-flash",
+            model="gemini-1.5-flash",
             contents=prompt,
         )
         raw = response.text.strip()
@@ -114,7 +114,7 @@ Keep it friendly, crisp, and under 220 words.
 """
     try:
         response = client.models.generate_content(
-            model="gemini-3.8-flash",
+            model="gemini-1.5-flash",
             contents=prompt,
         )
         return response.text.strip(), None

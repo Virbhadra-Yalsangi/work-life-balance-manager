@@ -13,7 +13,11 @@ def get_db_connection():
     conn.row_factory = sqlite3.Row
     return conn
 
-def send_telegram_alert(message):
+# DIRECT FUNCTIONS CALLED BY APP.PY
+def send_telegram(message):
+    """
+    app.py द्वारे थेट कॉल होणारे फंक्शन (Telegram)
+    """
     token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
     chat_id = os.getenv("TELEGRAM_CHAT_ID", "").strip()
     if not token or not chat_id:
@@ -30,7 +34,10 @@ def send_telegram_alert(message):
     except Exception as e:
         return False, str(e)
 
-def send_email_alert(subject, body):
+def send_email(subject_or_msg, body=None):
+    """
+    app.py द्वारे थेट कॉल होणारे फंक्शन (Email)
+    """
     api_key = os.getenv("SENDGRID_API_KEY", "").strip()
     from_email = os.getenv("SENDGRID_FROM_EMAIL", "").strip()
     to_email = os.getenv("NOTIFICATION_TO_EMAIL", "").strip()
@@ -38,6 +45,12 @@ def send_email_alert(subject, body):
     if not api_key or not from_email or not to_email:
         return False, "SendGrid credentials missing."
     
+    subject = "Work-Life Balance Alert"
+    if body is not None:
+        subject = subject_or_msg
+    else:
+        body = subject_or_msg
+
     url = "https://api.sendgrid.com/v3/mail/send"
     headers = {
         "Authorization": f"Bearer {api_key}",
@@ -58,16 +71,6 @@ def send_email_alert(subject, body):
     except Exception as e:
         return False, str(e)
 
-# --- ALIASES FOR APP.PY COMPATIBILITY ---
-def send_telegram(message):
-    return send_telegram_alert(message)
-
-def send_email(subject_or_msg, body=None):
-    if body is None:
-        return send_email_alert("Work-Life Balance Alert", subject_or_msg)
-    return send_email_alert(subject_or_msg, body)
-# ----------------------------------------
-
 def process_pending_reminders():
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -82,9 +85,9 @@ def process_pending_reminders():
             err_msg = None
             
             if channel == "telegram":
-                success, err_msg = send_telegram_alert(msg)
+                success, err_msg = send_telegram(msg)
             elif channel == "email":
-                success, err_msg = send_email_alert("Work-Life Balance Alert", msg)
+                success, err_msg = send_email("Work-Life Balance Alert", msg)
                 
             if success:
                 cursor.execute(

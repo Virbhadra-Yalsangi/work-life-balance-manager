@@ -38,7 +38,7 @@ def parse_natural_language_activities(user_text, reference_date=None):
     """
     client = _get_gemini_client()
     if client is None:
-        return [], "GEMINI_API_KEY is not set in .env. Add it to use AI Quick-Log."
+        return [], "GEMINI_API_KEY is not set. Please configure it in Streamlit Secrets or .env."
 
     ref_date = (reference_date or date.today()).isoformat()
     prompt = f"""
@@ -60,7 +60,7 @@ User message:
 """
     try:
         response = client.models.generate_content(
-            model="gemini-1.5-flash",
+            model="gemini-2.0-flash",
             contents=prompt,
         )
         raw = response.text.strip()
@@ -93,7 +93,7 @@ def generate_weekly_coach_insight(df, weekly_summary_dict):
     """
     client = _get_gemini_client()
     if client is None:
-        return None, "GEMINI_API_KEY is not set in .env. Add it to enable the AI Weekly Coach."
+        return None, "GEMINI_API_KEY is not set. Please configure it in Streamlit Secrets or .env."
 
     if df.empty:
         return "Log a few days of activities first so the AI Coach can analyze your routine!", None
@@ -114,7 +114,7 @@ Keep it friendly, crisp, and under 220 words.
 """
     try:
         response = client.models.generate_content(
-            model="gemini-1.5-flash",
+            model="gemini-2.0-flash",
             contents=prompt,
         )
         return response.text.strip(), None

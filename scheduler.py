@@ -12,6 +12,23 @@ from notifications import send_sms, send_voice_call, send_email, send_telegram
 TIMEZONE = ZoneInfo("Asia/Kolkata")
 CHECK_INTERVAL_SECONDS = 15
 
+import time
+from apscheduler.schedulers.background import BackgroundScheduler
+from notifications import process_pending_reminders
+
+def run_scheduler_job():
+    process_pending_reminders()
+
+def init_scheduler():
+    scheduler = BackgroundScheduler()
+    # दर ५ मिनिटांनी पेंडिंग रिमाइंडर्स तपासेल
+    scheduler.add_job(run_scheduler_job, 'interval', minutes=5)
+    scheduler.start()
+
+if __name__ == "__main__":
+    init_scheduler()
+    while True:
+        time.sleep(1)
 
 def process_due_reminders(dry_run=True, sender_functions=None):
     """

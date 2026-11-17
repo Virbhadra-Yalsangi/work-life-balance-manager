@@ -5,7 +5,6 @@ from pathlib import Path
 from dotenv import load_dotenv
 import requests
 
-# Load environment variables
 load_dotenv(Path(__file__).resolve().parent / ".env")
 
 def get_db_connection():
@@ -59,23 +58,26 @@ def send_email_alert(subject, body):
     except Exception as e:
         return False, str(e)
 
+# --- ALIASES FOR APP.PY COMPATIBILITY ---
+def send_telegram(message):
+    return send_telegram_alert(message)
+
+def send_email(subject_or_msg, body=None):
+    if body is None:
+        return send_email_alert("Work-Life Balance Alert", subject_or_msg)
+    return send_email_alert(subject_or_msg, body)
+# ----------------------------------------
+
 def process_pending_reminders():
-    """
-    तपासतो की कोणते रिमाइंडर्स पाठवायचे बाकी आहेत आणि फेल झाल्यास डेटाबेसमध्ये कारण रेकॉर्ड करतो.
-    """
     conn = get_db_connection()
     cursor = conn.cursor()
-    
     try:
-        # pending reminders fetch करा
         cursor.execute("SELECT id, channel, message FROM reminders WHERE status = 'pending'")
         reminders = cursor.fetchall()
-        
         for rem in reminders:
             rem_id = rem["id"]
             channel = rem["channel"]
             msg = rem["message"]
-            
             success = False
             err_msg = None
             
@@ -90,7 +92,6 @@ def process_pending_reminders():
                     (datetime.now().isoformat(), rem_id)
                 )
             else:
-                # फेल झालेला एरर डेटाबेसमध्ये सेव्ह करा जेणेकरून कळेल नेमका प्रॉब्लेम काय आहे
                 cursor.execute(
                     "UPDATE reminders SET status = 'failed', failure_reason = ?, updated_at = ? WHERE id = ?",
                     (str(err_msg)[:255], datetime.now().isoformat(), rem_id)

@@ -1,15 +1,3 @@
-"""
-Two-Way Interactive Telegram Bot Worker.
-
-Allows the user to:
-1. Tap "✅ Mark Completed" or "❌ Mark Missed" directly on reminder notifications.
-2. Send free-text activity updates on Telegram (e.g., "Worked 2 hours on SQL and 1 hr gym")
-   which get parsed via AI Quick-Log (if GEMINI_API_KEY is set) and saved to SQLite.
-
-Run:
-    python telegram_bot.py
-"""
-
 import os
 import time
 from datetime import date
@@ -18,7 +6,11 @@ import requests
 from dotenv import load_dotenv
 
 import database
-from ai_coach import parse_natural_language_activities
+
+try:
+    from ai_coach import parse_natural_language_activities
+except ImportError:
+    parse_natural_language_activities = None
 
 load_dotenv(Path(__file__).resolve().parent / ".env")
 
@@ -44,10 +36,10 @@ def handle_callback(token, callback_query):
         return
 
     if action == "plan_done":
-        ok, reply = database.update_planned_activity_status(plan_id, "Completed")
+        _, reply = database.update_planned_activity_status(plan_id, "Completed")
         status_banner = f"✅ Plan #{plan_id} marked Completed! ({reply})"
     elif action == "plan_fail":
-        ok, reply = database.update_planned_activity_status(
+        database.update_planned_activity_status(
             plan_id, "Failed", "Marked Missed via Telegram button."
         )
         status_banner = f"❌ Plan #{plan_id} marked Missed."
@@ -90,6 +82,17 @@ def handle_text_message(token, message):
         )
         return
 
+    if parse_natural_language_activities is None:
+        requests.post(
+            _api_url(token, "sendMessage"),
+            json={
+                "chat_id": chat_id,
+                "text": "ℹ️ Quick-log parser is not enabled yet. Tap ✅ or ❌ on reminders or log directly in the app.",
+            },
+            timeout=10,
+        )
+        return
+
     items, err = parse_natural_language_activities(text, date.today())
     if err or not items:
         requests.post(
@@ -107,7 +110,7 @@ def handle_text_message(token, message):
             item["activity_type"],
             item["duration_hours"],
             item["notes"],
-            item["energy_level"],
+            item.get("energy_level", 3),
         )
         icon = "✅" if ok else "⚠️"
         lines.append(f"{icon} {item['activity_type']} ({item['duration_hours']}h) - {msg}")

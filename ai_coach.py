@@ -1,129 +1,91 @@
-import json
-import os
-from datetime import date
-from pathlib import Path
-from dotenv import load_dotenv
-
-load_dotenv(Path(__file__).resolve().parent / ".env")
-
-VALID_ACTIVITIES = [
-    "Work",
-    "Study",
-    "Sleep",
-    "Exercise",
-    "Family & Friends",
-    "Personal Care",
-    "Commute",
-    "Meals",
-    "Leisure",
-    "Other",
-]
+import pandas as pd
 
 
-def _get_gemini_client():
-    api_key = os.getenv("GEMINI_API_KEY", "").strip()
-    if not api_key:
-        return None
-    try:
-        from google import genai
-        return genai.Client(api_key=api_key)
-    except Exception:
-        return None
-
-
-def parse_natural_language_activities(user_text, reference_date=None):
-    """
-    Convert natural language (Marathi, Hindi, or English) into structured activity records.
-    Returns (list_of_dicts, error_message_or_none).
-    """
-    client = _get_gemini_client()
-    if client is None:
-        return [], "GEMINI_API_KEY is not set. Please configure it in Streamlit Secrets or .env."
-
-    ref_date = (reference_date or date.today()).isoformat()
-    prompt = f"""
-You are a data parser for a Work-Life Balance tracker.
-Reference date (today): {ref_date}
-Allowed activity_type values: {json.dumps(VALID_ACTIVITIES)}
-
-Extract all logged activities from the user's message below (which may be in English, Marathi, or Hindi).
-Return ONLY a valid JSON array of objects, with no markdown fences or extra commentary.
-Each object must have:
-- "activity_date": "YYYY-MM-DD" (use {ref_date} unless user says yesterday/kal/kalcha etc.)
-- "activity_type": one of the exact allowed values above
-- "duration_hours": float (between 0.25 and 24.0)
-- "notes": short clean description in English
-- "energy_level": integer 1 to 5 (default 3 if not implied)
-
-User message:
-{user_text}
-"""
-    try:
-        response = client.models.generate_content(
-            model="gemini-3.8-flash",
-            contents=prompt,
+def get_ai_weekly_coach_insights(week_df, total_hours, work_hours, sleep_hours, balance_score):
+    """Generates reliable local health and productivity coaching insights from weekly activity logs."""
+    if week_df is None or not isinstance(week_df, pd.DataFrame) or week_df.empty:
+        return (
+            "### 📋 Weekly Routine Summary\n"
+            "- **Status:** No activity logs found for the past 7 days.\n"
+            "- **Next Step:** Log your daily Work, Sleep, Exercise, and personal hours using the sidebar or quick presets to unlock tailored weekly recommendations."
         )
-        raw = response.text.strip()
-        if raw.startswith("```"):
-            raw = raw.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
-        items = json.loads(raw)
-        if not isinstance(items, list):
-            return [], "AI returned an unexpected format."
-        cleaned = []
-        for item in items:
-            act_type = item.get("activity_type", "Other")
-            if act_type not in VALID_ACTIVITIES:
-                act_type = "Other"
-            cleaned.append({
-                "activity_date": item.get("activity_date", ref_date),
-                "activity_type": act_type,
-                "duration_hours": float(item.get("duration_hours", 1.0)),
-                "notes": str(item.get("notes", ""))[:200],
-                "energy_level": max(1, min(5, int(item.get("energy_level", 3)))),
-            })
-        return cleaned, None
-    except Exception as exc:
-        # Fallback friendly message for 503 / high demand / timeout
-        err_str = str(exc)
-        if "503" in err_str or "UNAVAILABLE" in err_str:
-            return [], "AI server is currently experiencing high demand (503). Please try again in 10 seconds or use the 'Manual' tab to log instantly."
-        return [], f"Could not parse text with AI: {exc}"
 
+    active_days = int(week_df["activity_date"].nunique()) if "activity_date" in week_df.columns else 1
+    active_days = max(active_days, 1)
 
-def generate_weekly_coach_insight(df, weekly_summary_dict):
-    """
-    Analyze the last 7 days of activity logs + energy ratings and return
-    actionable burnout & balance coaching advice.
-    """
-    client = _get_gemini_client()
-    if client is None:
-        return None, "GEMINI_API_KEY is not set. Please configure it in Streamlit Secrets or .env."
+    avg_work_day = work_hours / active_days
+    avg_sleep_day = sleep_hours / active_days
 
-    if df.empty:
-        return "Log a few days of activities first so the AI Coach can analyze your routine!", None
+    exercise_hours = (
+        float(week_df.loc[week_df["activity_type"] == "Exercise", "duration_hours"].sum())
+        if "activity_type" in week_df.columns and "duration_hours" in week_df.columns
+        else 0.0
+    )
+    leisure_hours = (
+        float(week_df.loc[week_df["activity_type"] == "Leisure", "duration_hours"].sum())
+        if "activity_type" in week_df.columns and "duration_hours" in week_df.columns
+        else 0.0
+    )
 
-    records_preview = df[["activity_date", "activity_type", "duration_hours", "energy_level", "notes"]].tail(40).to_dict(orient="records")
-    prompt = f"""
-You are a supportive, practical Work-Life Balance & Productivity Coach.
-Analyze the user's recent activity logs and weekly balance score ({weekly_summary_dict.get('score')}/100 - {weekly_summary_dict.get('label')}).
-
-Recent logs:
-{json.dumps(records_preview, default=str)}
-
-Provide a concise, high-impact coaching check-in with:
-1. **Burnout & Sleep Check:** Spot overwork or low sleep patterns.
-2. **Energy Drain vs Boost:** Point out which activities gave high energy (4-5) vs drained energy (1-2).
-3. **3 Concrete Actions for Tomorrow:** Specific, realistic adjustments.
-Keep it friendly, crisp, and under 220 words.
-"""
-    try:
-        response = client.models.generate_content(
-            model="gemini-3.8-flash",
-            contents=prompt,
+    if balance_score >= 75:
+        assessment = (
+            f"Your routine looks well-structured this week with a balance score of **{balance_score} / 100** "
+            f"across **{active_days}** active day(s)."
         )
-        return response.text.strip(), None
-    except Exception as exc:
-        err_str = str(exc)
-        if "503" in err_str or "UNAVAILABLE" in err_str:
-            return None, "AI Coach is temporarily busy due to high traffic (503). Please click 'Generate' again in a moment."
-        return None, f"AI Coach error: {exc}"
+    elif balance_score >= 45:
+        assessment = (
+            f"Your routine shows moderate balance (**{balance_score} / 100**), with room to tighten "
+            f"recovery and consistency across **{active_days}** active day(s)."
+        )
+    else:
+        assessment = (
+            f"Your balance score is **{balance_score} / 100**, indicating notable strain or uneven "
+            f"time allocation over the last 7 days."
+        )
+
+    strengths = []
+    if avg_sleep_day >= 7.0:
+        strengths.append(f"Consistent sleep average of **{avg_sleep_day:.1f} h/day** supporting mental recovery.")
+    if exercise_hours >= 3.0:
+        strengths.append(f"Strong physical activity with **{exercise_hours:.1f} h** of exercise logged.")
+    if total_hours >= 40.0:
+        strengths.append(f"Solid tracking discipline with **{total_hours:.1f} h** total logged time.")
+    if not strengths:
+        strengths.append(f"Active tracking maintained across **{active_days}** day(s) (**{total_hours:.1f} h** logged).")
+
+    improvements = []
+    if avg_work_day > 8.5:
+        improvements.append(
+            f"**High Work Load:** Averaging **{avg_work_day:.1f} h/day** of work raises fatigue and burnout risk."
+        )
+    if avg_sleep_day < 7.0:
+        improvements.append(
+            f"**Sleep Deficit:** Averaging **{avg_sleep_day:.1f} h/day** of sleep is below the 7h+ recovery mark."
+        )
+    if exercise_hours < 2.5:
+        improvements.append(
+            f"**Low Exercise:** Only **{exercise_hours:.1f} h** of exercise logged; aim for short daily movement sessions."
+        )
+    if leisure_hours < 2.0:
+        improvements.append(
+            f"**Limited Downtime:** Only **{leisure_hours:.1f} h** of leisure logged to decompress."
+        )
+    if not improvements:
+        improvements.append("No major workload or recovery red flags detected; keep protecting your rest windows.")
+
+    actions = [
+        "Set a hard stop time for work blocks and take a 10-minute screen break every 60–90 minutes.",
+        "Lock in a consistent wind-down routine before sleep to protect next-day focus.",
+        "Schedule a short daily slot for Exercise or Personal Care before evening fatigue sets in.",
+    ]
+
+    strengths_md = "\n".join(f"- {item}" for item in strengths)
+    improvements_md = "\n".join(f"- {item}" for item in improvements)
+    actions_md = "\n".join(f"- {item}" for item in actions)
+
+    return (
+        f"### 🌟 Overall Assessment\n{assessment}\n\n"
+        f"### ⚡ Strengths\n{strengths_md}\n\n"
+        f"### ⚠️ Areas of Improvement / Burnout Risk\n{improvements_md}\n\n"
+        f"### 🎯 Actionable Advice\n{actions_md}"
+    )
